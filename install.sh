@@ -173,7 +173,20 @@ check_docker() {
 
 # 修改后的 Docker 镜像配置函数
 configure_daemon() {
-    # ... 保持原有询问逻辑不变 ...
+    # 询问是否配置镜像加速
+    echo -e "${YELLOW}是否配置 Docker 镜像加速？(默认: Y) [Y/n]${NC}"
+    read -p "请输入选择: " configure_choice
+    configure_choice=${configure_choice:-Y}  # 默认值为 Y
+
+    if [[ $configure_choice =~ ^[Nn] ]]; then
+        echo -e "${YELLOW}已跳过 Docker 镜像加速配置${NC}"
+        return
+    fi
+
+    echo -e "${YELLOW}正在配置 Docker 镜像加速...${NC}"
+    
+    sudo mkdir -p /etc/docker
+    local config_file="/etc/docker/daemon.json"
 
     echo -e "${YELLOW}请选择 Docker 加速方式：${NC}"
     echo "1) 使用推荐镜像"
@@ -185,8 +198,8 @@ configure_daemon() {
     case ${docker_mirror_type:-1} in
         1)
             mirror_content=(
-                "https://docker.1ms.run"
-                "https://docker.xuanyuan.me"
+                "\"https://docker.1ms.run\""
+                "\"https://docker.xuanyuan.me\""
             )
             ;;
         2)
@@ -346,16 +359,15 @@ manual_github_mirror() {
 }
 
 manual_docker_mirror() {
-    echo -e "${YELLOW}请输入 Docker 镜像加速地址 (每行一个，输入空行结束)：${NC}"
-    local i=1
+    # 提示信息输出到 stderr，避免被命令替换捕获
+    echo -e "${YELLOW}请输入 Docker 镜像加速地址 (每行一个，输入空行结束)${NC}" >&2
     local mirrors=()
     while true; do
-        read -p "加速地址 $i: " mirror
-        [ -z "$mirror" ] && break
-        mirrors+=("\"$mirror\"")
-        ((i++))
+        read -p "地址: " line  # 输入提示也输出到 stderr
+        [ -z "$line" ] && break
+        mirrors+=("\"$line\"")  # 确保每个地址用双引号包裹
     done
-    printf '%s\n' "${mirrors[@]}"
+    echo "${mirrors[@]}"  # 输出镜像地址到 stdout
 }
 
 # 修改后的 GitHub 镜像选择逻辑
