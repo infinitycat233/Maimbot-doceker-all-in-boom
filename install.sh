@@ -1,9 +1,8 @@
 #!/bin/bash
 
 # 全局配置
-# export DOWNLOAD_URL="https://mirror.nju.edu.cn/docker-ce"
 MIRROR_SOURCES=(
-    "https://ghproxy.infinity-cat.cn/"
+    ""https://goppx.com/"
 )
 ORIGIN_URL="https://github.com/MaiM-with-u/MaiBot.git"
 STABLE_BRANCH="main"
