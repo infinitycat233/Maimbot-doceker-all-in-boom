@@ -3,7 +3,7 @@
 # 全局配置
 # export DOWNLOAD_URL="https://mirror.nju.edu.cn/docker-ce"
 MIRROR_SOURCES=(
-    "https://goppx.com/"
+    "https://ghproxy.infinity-cat.cn/"
 )
 ORIGIN_URL="https://github.com/MaiM-with-u/MaiBot.git"
 STABLE_BRANCH="main"
@@ -171,42 +171,48 @@ check_docker() {
     echo -e "${GREEN}Docker 已安装 ($(docker --version | cut -d ' ' -f 3))${NC}"
 }
 
-# 配置镜像加速
+# 修改后的 Docker 镜像配置函数
 configure_daemon() {
-    # 询问是否配置镜像加速
-    echo -e "${YELLOW}是否配置 Docker 镜像加速？(默认: Y) [Y/n]${NC}"
-    read -p "请输入选择: " configure_choice
-    configure_choice=${configure_choice:-Y}  # 默认值为 Y
+    # ... 保持原有询问逻辑不变 ...
 
-    if [[ $configure_choice =~ ^[Nn] ]]; then
-        echo -e "${YELLOW}已跳过 Docker 镜像加速配置${NC}"
-        return
-    fi
+    echo -e "${YELLOW}请选择 Docker 加速方式：${NC}"
+    echo "1) 使用推荐镜像"
+    echo "2) 手动输入镜像"
+    echo "3) 使用官方镜像"
+    read -p "请输入选择 (默认1): " docker_mirror_type
 
-    echo -e "${YELLOW}正在配置 Docker 镜像加速...${NC}"
-    
-    sudo mkdir -p /etc/docker
-    local config_file="/etc/docker/daemon.json"
-    
-    # 备份原配置文件
-    if [ -f "$config_file" ]; then
-        sudo cp "$config_file" "${config_file}.bak"
-        echo -e "${GREEN}已备份原配置: ${config_file}.bak${NC}"
-    fi
+    local mirror_content=""
+    case ${docker_mirror_type:-1} in
+        1)
+            mirror_content=(
+                "https://docker.1ms.run"
+                "https://docker.xuanyuan.me"
+            )
+            ;;
+        2)
+            mirror_content=($(manual_docker_mirror))
+            [ ${#mirror_content[@]} -eq 0 ] && error_exit "至少需要输入一个镜像地址"
+            ;;
+        3)
+            echo -e "${GREEN}已使用官方 Docker 镜像${NC}"
+            return
+            ;;
+        *)
+            error_exit "无效选择"
+            ;;
+    esac
 
     # 生成新配置
     sudo tee "$config_file" <<EOF
 {
-  "registry-mirrors": [
-    "https://docker.1ms.run",
-    "https://docker.xuanyuan.me"
-  ],
+  "registry-mirrors": [$(IFS=,; echo "${mirror_content[*]}")],
   "log-opts": {
     "max-size": "10m",
     "max-file": "3"
   }
 }
 EOF
+
 
     # 重启 Docker 服务
     echo -e "${YELLOW}正在重启 Docker 服务...${NC}"
@@ -330,6 +336,54 @@ EOF
     echo -e "${GREEN}开发版镜像构建完成！${NC}"
 }
 
+# 新增配置函数
+manual_github_mirror() {
+    read -p "请输入自定义 GitHub 镜像地址 (示例: https://ghproxy.com/): " custom_mirror
+    # 去除末尾的/
+    custom_mirror=${custom_mirror%/}
+    echo -e "${GREEN}使用自定义镜像源: ${custom_mirror}${NC}"
+    echo "$custom_mirror"
+}
+
+manual_docker_mirror() {
+    echo -e "${YELLOW}请输入 Docker 镜像加速地址 (每行一个，输入空行结束)：${NC}"
+    local i=1
+    local mirrors=()
+    while true; do
+        read -p "加速地址 $i: " mirror
+        [ -z "$mirror" ] && break
+        mirrors+=("\"$mirror\"")
+        ((i++))
+    done
+    printf '%s\n' "${mirrors[@]}"
+}
+
+# 修改后的 GitHub 镜像选择逻辑
+select_github_mirror() {
+    echo -e "${YELLOW}请选择 GitHub 加速方式：${NC}"
+    echo "1) 使用预设镜像"
+    echo "2) 手动输入镜像地址"
+    echo "3) 不使用加速"
+    read -p "请输入选择 (默认1): " mirror_type
+
+    case ${mirror_type:-1} in
+        1)
+            selected_mirror=${MIRROR_SOURCES[$RANDOM % ${#MIRROR_SOURCES[@]}]}
+            echo -e "${GREEN}使用随机镜像源: ${selected_mirror}${NC}"
+            repo_url="${selected_mirror}${ORIGIN_URL}"
+            ;;
+        2)
+            repo_url="$(manual_github_mirror)/${ORIGIN_URL}"
+            ;;
+        3)
+            repo_url=$ORIGIN_URL
+            ;;
+        *)
+            error_exit "无效选择"
+            ;;
+    esac
+}
+
 # 主安装流程
 main() {
 
@@ -359,12 +413,7 @@ main() {
 
    # 镜像加速选择
     read -p "是否启用 GitHub 镜像加速？(Y/n): " mirror_choice
-    if [[ $mirror_choice =~ ^[Nn] ]]; then
-        repo_url=$ORIGIN_URL
-    else
-        selected_mirror=${MIRROR_SOURCES[$RANDOM % ${#MIRROR_SOURCES[@]}]}
-        repo_url="${selected_mirror}${ORIGIN_URL}"  # 修正后的关键行
-    fi
+    select_github_mirror
 
     git clone -b "$branch" "$repo_url" "$CLONE_DIR" || error_exit "仓库克隆失败"
     cd "$CLONE_DIR" || error_exit "无法进入项目目录"

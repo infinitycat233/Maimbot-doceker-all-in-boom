@@ -22,6 +22,19 @@ error_exit() {
     exit 1
 }
 
+# 显示使用说明
+usage() {
+    echo -e "${YELLOW}用法: $0 [command]"
+    echo -e "可用命令:"
+    echo -e "  start     - 启动所有服务"
+    echo -e "  stop      - 停止所有服务"
+    echo -e "  restart   - 重启所有服务"
+    echo -e "  status    - 查看服务状态"
+    echo -e "  update    - 更新代码/镜像并重启"
+    echo -e "  help      - 显示本帮助信息${NC}"
+    exit 0
+}
+
 # 进入项目目录
 enter_project_dir() {
     echo -e "${YELLOW}正在进入项目目录: ${PROJECT_DIR}${NC}"
@@ -170,9 +183,12 @@ main() {
             update_repository
             update_process
             ;;
+        help|-h|--help)
+            usage
+        ;;
         *)
-            echo "使用方法: $0 {start|stop|restart|status|update}"
-            exit 1
+            echo -e "${RED}未知命令: $1${NC}"
+            usage
             ;;
     esac
 }
