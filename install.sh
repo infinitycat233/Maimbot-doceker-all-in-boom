@@ -2,13 +2,14 @@
 
 # 全局配置
 MIRROR_SOURCES=(
-    ""https://goppx.com/"
+    "https://goppx.com/"
 )
 ORIGIN_URL="https://github.com/MaiM-with-u/MaiBot.git"
 STABLE_BRANCH="main"
 DEVELOPMENT_BRANCH="main-fix"
-CLONE_DIR="MaiBot"
+CLONE_DIR="MaiBot-docker"
 PACKAGES="ca-certificates curl gnupg jq git"
+CONFIG_DIR="docker-config" # 配置文件目录
 
 # 颜色定义
 RED='\033[0;31m'
@@ -25,11 +26,20 @@ smart_sudo() {
     fi
 }
 
-
 # 错误处理函数
 error_exit() {
     echo -e "${RED}[错误] $1${NC}" >&2
     exit 1
+}
+
+# 新增函数：检查是否在项目目录
+check_project_files() {
+    if [ -f "bot.py" ] && [ -f "Dockerfile" ] && [ -f "docker-compose.yml" ]; then
+        echo -e "${GREEN}检测到当前目录已存在项目文件，跳过克隆步骤${NC}"
+        return 0
+    else
+        return 1
+    fi
 }
 
 # 安装基础依赖
@@ -55,7 +65,7 @@ install_dependencies() {
 # 在全局配置部分添加
 PYTHON_EXE="python3"
 
-# 新增函数：检查Python版本并安装需要的版本
+# 检查Python版本并安装需要的版本
 check_python_version() {
     echo -e "${YELLOW}检查 Python 版本...${NC}"
     
@@ -82,7 +92,7 @@ check_python_version() {
     fi
 }
 
-# 新增函数：安装Python3.12
+# 安装Python3.12
 install_python3_12() {
     echo -e "${YELLOW}开始安装 Python 3.12...${NC}"
     
@@ -110,8 +120,16 @@ install_python3_12() {
     echo -e "${GREEN}Python 3.12 安装成功${NC}"
 }
 
-# 新增函数：创建虚拟环境
+# 创建虚拟环境
 create_virtualenv() {
+    # 询问是否创建虚拟环境
+    read -p "是否创建 Python 虚拟环境？(默认: Y) [Y/n]: " create_venv
+    create_venv=${create_venv:-Y}
+    if [[ $create_venv =~ ^[Nn] ]]; then
+        echo -e "${YELLOW}已跳过虚拟环境创建${NC}"
+        return
+    fi
+
     echo -e "${YELLOW}创建 Python 虚拟环境...${NC}"
     
     # 检查是否已有虚拟环境
@@ -149,8 +167,6 @@ check_docker_group() {
     fi
 }
 
-
-
 # Docker 安装检查
 check_docker() {
     echo -e "${YELLOW}检查 Docker 环境...${NC}"
@@ -170,12 +186,12 @@ check_docker() {
     echo -e "${GREEN}Docker 已安装 ($(docker --version | cut -d ' ' -f 3))${NC}"
 }
 
-# 修改后的 Docker 镜像配置函数
+# Docker 镜像配置
 configure_daemon() {
     # 询问是否配置镜像加速
-    echo -e "${YELLOW}是否配置 Docker 镜像加速？(默认: Y) [Y/n]${NC}"
+    echo -e "${YELLOW}是否配置 Docker 镜像加速？(默认: n) [Y/n]${NC}"
     read -p "请输入选择: " configure_choice
-    configure_choice=${configure_choice:-Y}  # 默认值为 Y
+    configure_choice=${configure_choice:-n}
 
     if [[ $configure_choice =~ ^[Nn] ]]; then
         echo -e "${YELLOW}已跳过 Docker 镜像加速配置${NC}"
@@ -228,6 +244,7 @@ EOF
 
     # 重启 Docker 服务
     echo -e "${YELLOW}正在重启 Docker 服务...${NC}"
+    sudo systemctl daemon-reload
     if sudo systemctl restart docker; then
         echo -e "${GREEN}Docker 镜像加速配置成功！${NC}"
     else
@@ -241,17 +258,14 @@ check_eula() {
     echo -e "${YELLOW}按 q 键退出阅读...${NC}"
     sleep 3
 
-    # 定义文件处理函数
     process_agreement() {
         local doc_name=$1
         local doc_file=$2
         local confirm_file=$3
         
-        # 计算哈希值
         local current_hash=$(md5sum "$doc_file" 2>/dev/null | awk '{print $1}')
         [ -z "$current_hash" ] && error_exit "${doc_file} 文件不存在或无法读取"
 
-        # 判断是否需要确认
         local need_confirm=true
         if [ -f "$confirm_file" ]; then
             local stored_hash=$(cat "$confirm_file")
@@ -259,7 +273,6 @@ check_eula() {
         fi
 
         if $need_confirm; then
-            # 显示完整协议内容
             echo -e "\n${YELLOW}====== 请仔细阅读完整 ${doc_name} ======${NC}"
             if command -v less &>/dev/null; then
                 less -R "$doc_file"
@@ -269,7 +282,6 @@ check_eula() {
                 read -p "按回车键继续..."
             fi
 
-            # 确认协议
             while true; do
                 read -p "是否同意 ${doc_name}？(Y-同意 / N-不同意): " confirm
                 case $confirm in
@@ -291,10 +303,7 @@ check_eula() {
         fi
     }
 
-    # 处理 EULA
     process_agreement "最终用户许可协议" "EULA.md" "eula.confirmed"
-    
-    # 处理隐私条款
     process_agreement "隐私保护协议" "PRIVACY.md" "privacy.confirmed"
 
     echo -e "${GREEN}所有协议确认完成！${NC}"
@@ -304,10 +313,8 @@ check_eula() {
 build_dev_image() {
     echo -e "${YELLOW}开始构建开发版镜像...${NC}"
 
-    # 检查 Dockerfile
     [ ! -f "Dockerfile" ] && error_exit "未找到 Dockerfile"
 
-    # 配置 .dockerignore
     echo -e "${YELLOW}更新 .dockerignore 文件...${NC}"
     cat > .dockerignore <<-'EOF'
 .git
@@ -325,7 +332,6 @@ napcat
 EOF
     [ $? -ne 0 ] && error_exit ".dockerignore 文件写入失败"
 
-    # 清理旧镜像
     if docker image inspect maimbot:local &>/dev/null; then
         read -p "发现已存在的本地镜像，是否重新构建？(Y/n): " rebuild
         if [[ $rebuild =~ ^[Nn] ]]; then
@@ -334,11 +340,9 @@ EOF
         fi
     fi
 
-    # 修改 Dockerfile 添加镜像源
     echo -e "${YELLOW}正在为 pip 添加清华镜像源...${NC}"
     sed -i 's/^\(RUN pip install --upgrade -r requirements.txt\)$/\1 -i https:\/\/mirrors.tuna.tsinghua.edu.cn\/pypi\/web\/simple/' Dockerfile || error_exit "Dockerfile 修改失败"
 
-    # 开始构建
     echo -e "构建镜像可能需要较长时间，请耐心等待..."
     docker pull nonebot/nb-cli:latest
     if ! docker build -t maimbot:local . ; then
@@ -348,28 +352,24 @@ EOF
     echo -e "${GREEN}开发版镜像构建完成！${NC}"
 }
 
-# 新增配置函数
 manual_github_mirror() {
     read -p "请输入自定义 GitHub 镜像地址 (示例: https://ghproxy.com/): " custom_mirror
-    # 去除末尾的/
     custom_mirror=${custom_mirror%/}
     echo -e "${GREEN}使用自定义镜像源: ${custom_mirror}${NC}"
     echo "$custom_mirror"
 }
 
 manual_docker_mirror() {
-    # 提示信息输出到 stderr，避免被命令替换捕获
     echo -e "${YELLOW}请输入 Docker 镜像加速地址 (每行一个，输入空行结束)${NC}" >&2
     local mirrors=()
     while true; do
-        read -p "地址: " line  # 输入提示也输出到 stderr
+        read -p "地址: " line
         [ -z "$line" ] && break
-        mirrors+=("\"$line\"")  # 确保每个地址用双引号包裹
+        mirrors+=("\"$line\"")
     done
-    echo "${mirrors[@]}"  # 输出镜像地址到 stdout
+    echo "${mirrors[@]}"
 }
 
-# 修改后的 GitHub 镜像选择逻辑
 select_github_mirror() {
     echo -e "${YELLOW}请选择 GitHub 加速方式：${NC}"
     echo "1) 使用预设镜像"
@@ -395,56 +395,25 @@ select_github_mirror() {
     esac
 }
 
-# 主安装流程
-main() {
-
-    sudo chmod +x ./common.sh
+# 生成配置文件到指定目录
+generate_configs() {
+    echo -e "${YELLOW}生成配置文件到 ${CONFIG_DIR}...${NC}"
+    mkdir -p "$CONFIG_DIR"
     
-    # 安装依赖
-    install_dependencies
-
-    # 检查Python版本
-    check_python_version
-
-    # 检查 Docker
-    check_docker
-    configure_daemon
-
-    # docker权限检查
-    check_docker_group
-
-    # 克隆仓库
-    echo -e "${YELLOW}开始克隆仓库...${NC}"
-    read -p "选择版本 (1-稳定版 / 2-开发版): " branch_choice
-    case $branch_choice in
-        1) branch=$STABLE_BRANCH ;;
-        2) branch=$DEVELOPMENT_BRANCH ;;
-        *) error_exit "无效选择" ;;
-    esac
-
-   # 镜像加速选择
-    read -p "是否启用 GitHub 镜像加速？(Y/n): " mirror_choice
-    select_github_mirror
-
-    git clone -b "$branch" "$repo_url" "$CLONE_DIR" || error_exit "仓库克隆失败"
-    cd "$CLONE_DIR" || error_exit "无法进入项目目录"
-
-    # 创建虚拟环境
-    create_virtualenv
-    
-    # 开发版镜像构建
-    if [ "$branch" = "$DEVELOPMENT_BRANCH" ]; then
-        build_dev_image
+    # 迁移旧配置文件
+    if [ -f "bot_config.toml" ] && [ ! -f "${CONFIG_DIR}/bot_config.toml" ]; then
+        mv bot_config.toml "${CONFIG_DIR}/"
+    fi
+    if [ -f ".env.prod" ] && [ ! -f "${CONFIG_DIR}/.env.prod" ]; then
+        mv .env.prod "${CONFIG_DIR}/"
     fi
 
-    # 生成配置文件
-    echo -e "${YELLOW}生成配置文件...${NC}"
-    cp template/bot_config_template.toml bot_config.toml
-    cp template.env .env.prod
+    # 生成新配置
+    cp template/bot_config_template.toml "${CONFIG_DIR}/bot_config.toml"
+    cp template.env "${CONFIG_DIR}/.env.prod"
 
-    # 自动设置 MongoDB 主机地址
-    echo -e "${YELLOW}配置数据库连接...${NC}"
-    sed -i "s/^MONGODB_HOST=.*/MONGODB_HOST=mongodb/" .env.prod
+    # 自动设置 MongoDB
+    sed -i "s/^MONGODB_HOST=.*/MONGODB_HOST=mongodb/" "${CONFIG_DIR}/.env.prod"
 
     # 配置 QQ 机器人
     read -p "请输入机器人 QQ 号: " qq_num
@@ -455,18 +424,16 @@ main() {
     read -p "允许回复的群号（多个用逗号分隔）: " groups
     groups=$(echo "$groups" | tr -d '[:space:]' | sed 's/,/, /g')
 
-    sed -i "s/qq = 123/qq = $qq_num/" bot_config.toml
-    sed -i "s/talk_allowed = \[.*\]/talk_allowed = [${groups}]/" bot_config.toml
+    sed -i "s/qq = 123/qq = $qq_num/" "${CONFIG_DIR}/bot_config.toml"
+    sed -i "s/talk_allowed = \[.*\]/talk_allowed = [${groups}]/" "${CONFIG_DIR}/bot_config.toml"
 
     # API 配置
     read -p "输入 SiliconFlow API 密钥: " api_key
-    sed -i "s/SILICONFLOW_KEY=/SILICONFLOW_KEY=$api_key/" .env.prod
+    sed -i "s/SILICONFLOW_KEY=/SILICONFLOW_KEY=$api_key/" "${CONFIG_DIR}/.env.prod"
+}
 
-    # 协议确认
-    check_eula
-
-    # 生成 docker-compose
-    echo -e "${YELLOW}生成容器配置...${NC}"
+# 生成docker-compose配置
+generate_docker_compose() {
     local maimbot_image="sengokucola/maimbot:latest"
     [ "$branch" = "$DEVELOPMENT_BRANCH" ] && maimbot_image="maimbot:local"
 
@@ -510,10 +477,8 @@ services:
       - mongodb
       - napcat
     volumes:
-      - ./bot_config.toml:/MaiMBot/config/bot_config.toml
-      - ./.env.prod:/MaiMBot/.env.prod
-      - ./elua.confirmed:/MaiMBot/elua.confirmed
-      - ./privacy.confirmed:/MaiMBot/privacy.confirmed
+      - ./${CONFIG_DIR}/bot_config.toml:/MaiMBot/config/bot_config.toml
+      - ./${CONFIG_DIR}/.env.prod:/MaiMBot/.env.prod
       - maimbot_data:/MaiMBot/data
       - napcat_config:/MaiMBot/napcat
     restart: unless-stopped
@@ -523,19 +488,62 @@ volumes:
   napcat_config:
   maimbot_data:
 EOF
+}
 
-    # 启动服务
-    echo -e "${GREEN}正在启动容器...${NC}"
+# 主安装流程
+main() {
+    sudo chmod +x ./common.sh
+
+    # 文件检测
+    if check_project_files; then
+        SKIP_CLONE=true
+    else
+        SKIP_CLONE=false
+    fi
+
+    install_dependencies
+    check_python_version
+
+    # 仅在需要时克隆仓库
+    if [ "$SKIP_CLONE" = false ]; then
+        check_docker
+        configure_daemon
+        check_docker_group
+
+        echo -e "${YELLOW}开始克隆仓库...${NC}"
+        read -p "选择版本 (1-稳定版 / 2-开发版): " branch_choice
+        case $branch_choice in
+            1) branch=$STABLE_BRANCH ;;
+            2) branch=$DEVELOPMENT_BRANCH ;;
+            *) error_exit "无效选择" ;;
+        esac
+
+        read -p "是否启用 GitHub 镜像加速？(Y/n): " mirror_choice
+        select_github_mirror
+
+        git clone -b "$branch" "$repo_url" "$CLONE_DIR" || error_exit "仓库克隆失败"
+        cd "$CLONE_DIR" || error_exit "无法进入项目目录"
+    fi
+
+    create_virtualenv
     
+    if [ "$branch" = "$DEVELOPMENT_BRANCH" ] && [ "$SKIP_CLONE" = false ]; then
+        build_dev_image
+    fi
+
+    generate_configs
+    check_eula
+    generate_docker_compose
+
+    echo -e "${GREEN}正在启动容器...${NC}"
     docker compose up -d
 
     echo -e "${GREEN}部署完成！${NC}"
     echo -e "${RED}提示："
-    echo -e "${GREEN}修改.env.prod来配置其他api提供商${NC}"
-    echo -e "${GREEN}启动webui或修改bot_config.toml进行更多配置${NC}"
+    echo -e "${GREEN}修改 ${CONFIG_DIR}/.env.prod 来配置其他API提供商${NC}"
+    echo -e "${GREEN}启动webui或修改 ${CONFIG_DIR}/bot_config.toml 进行更多配置${NC}"
     echo -e "访问 http://localhost:6099 进行配置napcat"
     echo -e "执行./common.sh 管理服务${NC}"
 }
 
-# 执行主函数
 main

@@ -11,9 +11,10 @@ CLONE_DIR="MaiBot"
 STABLE_BRANCH="main"
 DEVELOPMENT_BRANCH="main-fix"
 COMPOSE_FILE="docker-compose.yml"
+REQUIRED_FILES=("bot.py" "Dockerfile" "docker-compose.yml")
 
 # 初始化路径
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 PROJECT_DIR="${SCRIPT_DIR}/${CLONE_DIR}"
 
 # 错误处理函数
@@ -35,10 +36,33 @@ usage() {
     exit 0
 }
 
+# 检查当前目录是否包含必要文件
+check_current_dir() {
+    for file in "${REQUIRED_FILES[@]}"; do
+        if [ ! -f "$file" ]; then
+            return 1
+        fi
+    done
+    echo -e "${GREEN}检测到当前目录已包含项目文件，跳过目录切换${NC}"
+    return 0
+}
+
 # 进入项目目录
 enter_project_dir() {
+    # 如果当前目录已包含必要文件则跳过
+    check_current_dir && return 0
+
     echo -e "${YELLOW}正在进入项目目录: ${PROJECT_DIR}${NC}"
+    
+    if [ ! -d "${PROJECT_DIR}" ]; then
+        error_exit "项目目录不存在: ${PROJECT_DIR}"
+    fi
+
     cd "${PROJECT_DIR}" || error_exit "无法进入项目目录"
+    
+    if ! check_current_dir; then
+        error_exit "项目目录缺少必要文件，请检查以下文件是否存在：${REQUIRED_FILES[*]}"
+    fi
 }
 
 # --------------------- 通用功能 ---------------------
@@ -57,7 +81,7 @@ check_compose_file() {
 # --------------------- 服务管理 ---------------------
 service_status() {
     echo -e "${YELLOW}当前服务状态:${NC}"
-    docker compose ps -a 2>&1 # 直接输出原生信息
+    docker compose ps -a || error_exit "状态查询失败"
 }
 
 start_services() {
@@ -82,58 +106,81 @@ get_current_branch() {
     git symbolic-ref --short HEAD 2>/dev/null || error_exit "无法获取当前分支"
 }
 
+lock_docker_files() {
+    for file in Dockerfile docker-compose.yml; do
+        if [ -f "$file" ]; then
+            git update-index --skip-worktree "$file" 2>/dev/null
+            echo -e "${GREEN}已锁定文件: $file${NC}"
+        fi
+    done
+}
+
+unlock_docker_files() {
+    for file in Dockerfile docker-compose.yml; do
+        if [ -f "$file" ]; then
+            git update-index --no-skip-worktree "$file" 2>/dev/null
+        fi
+    done
+}
+
 update_repository() {
     echo -e "${YELLOW}正在更新代码仓库...${NC}"
     local current_branch=$(get_current_branch)
-    
-    # 锁定关键配置文件（新增部分）
-    lock_docker_files() {
-        for file in Dockerfile docker-compose.yml; do
-            if [ -f "$file" ]; then
-                git update-index --skip-worktree "$file" || error_exit "无法锁定文件: $file"
-                echo -e "${GREEN}已锁定文件: $file${NC}"
-            fi
-        done
-    }
 
-    # 解除文件锁定
-    unlock_docker_files() {
-        for file in Dockerfile docker-compose.yml; do
-            if [ -f "$file" ]; then
-                git update-index --no-skip-worktree "$file"
-            fi
-        done
-    }
-
-    # 在更新前锁定文件
+    # 锁定配置文件
     lock_docker_files
 
     # 重置并拉取更新
     git reset --hard "origin/$current_branch" || error_exit "重置本地修改失败"
-    git pull --ff-only "origin" "$current_branch" || error_exit "代码拉取失败"
+    if ! git pull --ff-only "origin" "$current_branch"; then
+        unlock_docker_files
+        error_exit "代码拉取失败"
+    fi
 
-    # 更新后解除锁定
-    #unlock_docker_files
-    
     echo -e "${GREEN}代码更新完成 (分支: ${current_branch})${NC}"
 }
 
 check_config_version() {
     echo -e "${YELLOW}检查配置文件版本...${NC}"
     
-    # 使用更安全的版本提取方式
-    local template_version=$(awk -F'"' '/^version/ {print $2}' template/bot_config_template.toml)
-    local config_version=$(awk -F'"' '/^version/ {print $2}' bot_config.toml)
+    local template_version=$(awk -F'"' '/^version/ {print $2}' template/bot_config_template.toml 2>/dev/null)
+    local config_version=$(awk -F'"' '/^version/ {print $2}' bot_config.toml 2>/dev/null)
     
+    if [[ -z "$template_version" || -z "$config_version" ]]; then
+        echo -e "${YELLOW}跳过配置文件版本检查${NC}"
+        return
+    fi
+
     if [[ "$template_version" != "$config_version" ]]; then
         echo -e "${YELLOW}发现配置更新 (${config_version} → ${template_version})${NC}"
         
-        if [[ -f "config/auto_update.py" ]]; then
+        if [[ -f "config/auto_update.py" && -d ".venv" ]]; then
             echo -e "${YELLOW}执行自动配置更新...${NC}"
-            ./.venv/bin/python config/auto_update.py || error_exit "自动更新失败"
+            
+            # 备份并临时修改配置路径
+            if sed -i.bak 's|config_dir = root_dir / "config"|config_dir = root_dir / "docker-config"|' config/auto_update.py; then
+                echo -e "${GREEN}已临时修改配置目录路径${NC}"
+            else
+                error_exit "配置文件修改失败"
+            fi
+            
+            # 执行自动更新
+            if ! ./.venv/bin/python config/auto_update.py; then
+                # 恢复原始文件并报错
+                mv -f config/auto_update.py.bak config/auto_update.py
+                error_exit "自动更新失败"
+            fi
+            
+            # 恢复原始配置文件
+            if mv -f config/auto_update.py.bak config/auto_update.py; then
+                echo -e "${GREEN}配置路径已恢复${NC}"
+            else
+                error_exit "配置文件恢复失败"
+            fi
+            
             echo -e "${GREEN}配置更新完成${NC}"
         else
-            echo -e "${RED}警告：缺少自动更新脚本 config/auto_update.py${NC}"
+            echo -e "${RED}警告：缺少自动更新所需组件${NC}"
         fi
     else
         echo -e "${GREEN}配置文件版本一致 (${template_version})${NC}"
@@ -143,7 +190,6 @@ check_config_version() {
 update_process() {
     local current_branch=$(get_current_branch)
     
-    # 分支专属操作
     case $current_branch in
         $STABLE_BRANCH)
             echo -e "${YELLOW}[稳定版] 拉取最新镜像...${NC}"
@@ -157,20 +203,28 @@ update_process() {
     esac
     
     # 检查虚拟环境
-    [[ -d ".venv" ]] || error_exit "虚拟环境 .venv 不存在"
+    if [ ! -d ".venv" ]; then
+        error_exit "虚拟环境 .venv 不存在，请先初始化项目"
+    fi
     
-    # 配置更新检查
     check_config_version
     
-    # 重启服务
     echo -e "${YELLOW}重启服务中...${NC}"
     docker compose up -d --force-recreate || error_exit "服务重启失败"
+    
+    # 解除文件锁定
+    unlock_docker_files
+    
     echo -e "${GREEN}更新完成!${NC}"
 }
 
 # --------------------- 主入口 ---------------------
 main() {
-    enter_project_dir  # 确保所有操作在项目目录执行
+    # 先检查当前目录，不满足条件时才进入项目目录
+    if ! check_current_dir; then
+        enter_project_dir
+    fi
+    
     check_dependencies
     check_compose_file
 
@@ -185,7 +239,7 @@ main() {
             ;;
         help|-h|--help)
             usage
-        ;;
+            ;;
         *)
             echo -e "${RED}未知命令: $1${NC}"
             usage
